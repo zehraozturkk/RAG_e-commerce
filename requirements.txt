@@ -1,0 +1,6 @@
+psycopg2 
+faker
+openai
+pinecone
+pinecone-client==2.2.1
+python-dotenv==1.0.0

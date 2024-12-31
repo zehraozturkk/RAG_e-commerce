@@ -1,0 +1,17 @@
+# Log dosyaları
+*.log
+
+# Node.js bağımlılıkları
+node_modules/
+
+# Python sanal ortam klasörleri
+venv/
+.env
+
+# Geçici dosyalar
+*.tmp
+*.swp
+
+# IDE dosyaları
+.idea/
+.vscode/
