@@ -36,6 +36,7 @@ class UpdateData:
                         (name, )
                     )
                 result = self.cursor.fetchone()
+                print(result)
                 if result is None:
                     thread_logger.error("Failed to insert user - no ID returned")
                     continue
@@ -44,7 +45,7 @@ class UpdateData:
                 self.connection.commit()
                 
                 thread_logger.info(f"New user created: {name} (ID: {user_id})")
-                time.sleep(randint(3,6))
+                time.sleep(randint(1,5))
                 #self.order_queue.put(user_id)
         except Exception as e:
             print(f"Error in generate_user: {e}")
@@ -110,7 +111,7 @@ class UpdateData:
                 if deleted_count > 0:
                     thread_logger.info(f"Deleted {deleted_count} old orders")
                 thread_logger.debug("Performed cleanup check")
-                time.sleep(60)
+                time.sleep(10)
         except Exception as e:
             thread_logger.error(f"error deleting old orders: {e}")
 

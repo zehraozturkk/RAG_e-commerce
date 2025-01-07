@@ -1,5 +1,6 @@
 # Log dosyaları
 *.log
+*ipynb
 
 # Node.js bağımlılıkları
 node_modules/

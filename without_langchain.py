@@ -9,10 +9,9 @@ load_dotenv()
 
 # Model ve Pinecone kurulumu
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index("e-commerce")
+index = pc.Index("ecommerce-2")
 openai.api_key = os.getenv("OPENAI_API_KEY")
-model = SentenceTransformer('all-MiniLM-L12-v2')
-
+model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
 
 
 def search(top_k, query ):
@@ -23,19 +22,20 @@ def search(top_k, query ):
             vector=query_vector,
             top_k=top_k, 
             include_metadata=True,
-            namespace="e-commerce",
+            namespace="e-commerce2",
             # filter= {"user_name":{"$eq":"Dana Smith"}}
         )
         matched_count = len(docs.matches)
         print(matched_count)
         retrieved_docs = []
-        for doc in docs.get('matches', []):  # 'matched' yerine 'matches' kullanılmalı
+        for doc in docs.get('matches', []): 
                 metadata = doc['metadata']
-                score = doc['score']  # Benzerlik skorunu da alalım
+                score = doc['score']  
                 retrieved_docs.append({
                     'metadata': metadata,
                     'score': score
                 })
+        print(retrieved_docs)
         if not retrieved_docs:
                 print("No results found. Checking index status...")
                 debug_index()
@@ -83,7 +83,7 @@ def question_answering(prompt, chat_model):
     return answer
 
 
-def analyze_logs(query, top_k=500):
+def analyze_logs(query, top_k=100):
     documents = search(
         query=query,
         top_k=top_k,
@@ -101,14 +101,14 @@ def analyze_logs(query, top_k=500):
     
     return answer
 
-
-if __name__ == "__main__":
-    print("checikng index")
+def queryy(input):
     debug_index()
-    query = "How many orders has User Kathleen Bridges placed?"
-    # result, mached = search(
-    #     query=query,
-    #     top_k=100,
-    # )
-    result = analyze_logs(query)
+    query = "can you give me tha name of user who buy a Shampoo (Yellow)"
+
+    result = analyze_logs(input)
+    return result
+     
+if __name__ == "__main__":
+    result =  queryy(input="who bought a Shampoo (Yellow)")
     print(result)
+ 

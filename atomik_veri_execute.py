@@ -1,16 +1,22 @@
 from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
 from connect_db import create_connection
-from postgre_to_pinecone import create_embeddings
-from sentence_transformers import SentenceTransformer
 from collections import defaultdict
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_pinecone import PineconeVectorStore
+import logging
+from langchain_core.documents import Document
 import time
 import threading
 import os
 
-model = SentenceTransformer('all-MiniLM-L12-v2')
 
 load_dotenv()
+logger = logging.getLogger()
+
+
+logging.basicConfig(level=logging.INFO, filename="upsert_pinecone.log", filemode="w", 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
 
@@ -39,18 +45,12 @@ def fetch_changed_records():
     data = [dict(zip(columns, row)) for row in cursor.fetchall()]
     connection.close()
     return data
-from collections import defaultdict
-from sentence_transformers import SentenceTransformer
 
-# Kullanılacak model
-model = SentenceTransformer('all-MiniLM-L12-v2')
 
-def create_embeddings(data):
-    embeddings = []
+def prepare(data):
+    documents = []
     grouped_orders = defaultdict(list)
     
-    # Gelen veriyi işlerken, kullanıcı ve sipariş bilgilerini gruplayarak
-    # her bir siparişteki ürünleri bir araya getireceğiz
     for row in data:
         user_id = row['user_id']
         user_name = row['user_name']
@@ -59,18 +59,15 @@ def create_embeddings(data):
         product_category = row['product_category']
         order_id = row['order_id']
         
-        # Her bir siparişi kullanıcı ve sipariş tarihi ile grupluyoruz
         key = (user_id, order_date)
         
-        # Eğer bu kullanıcı ve tarih daha önce gruplanmadıysa, başlatıyoruz
         if key not in grouped_orders:
             grouped_orders[key] = {
                 'user_name': user_name,
-                'order_id': order_id,  # order_id'yi de kaydediyoruz
-                'products': []  # Ürünler için boş liste
+                'order_id': order_id, 
+                'products': []  
             }
         
-        # Ürün bilgilerini ekliyoruz
         grouped_orders[key]['products'].append({
             'product_name': product_name,
             'category': product_category
@@ -82,16 +79,15 @@ def create_embeddings(data):
         products = details['products']
         order_id = details['order_id']
         
-        # Ürünlerin adlarını birleştiriyoruz (örneğin, "Shampoo (Hair) and Body Lotion (Personal Care)")
-        products_text = " and ".join([f"{p['product_name']} ({p['category']})" for p in products])
+        products_text = " and ".join([
+                    f"{p['product_name']} ({p['category']})"
+                    for p in products if isinstance(p, dict)
+                ])
 
-        # Kullanıcı ve ürün bilgilerini birleştirerek metin oluşturuyoruz
         text = f"User {user_name} ordered {products_text} on {order_date}"
         
-        # Bu metni model ile encode ediyoruz (embedding)
-        embedding = model.encode(text)
+        #embedding = model.encode(text)
         
-        # Metadata'yı oluşturuyoruz (kullanıcı bilgileri ve ürünler)
         metadata = {
             "user_id": user_id,
             "user_name": user_name,
@@ -100,32 +96,51 @@ def create_embeddings(data):
             "categories": [p['category'] for p in products]
         }
         
-        # Benzersiz bir ID oluşturuyoruz (user_id ve order_date birleştirilmiş)
-        unique_id = f"{user_id}_{order_date}"
+        doc = Document(
+                    page_content = text,
+                    metadata=metadata
+                )
+        
+        documents.append(doc)
+        logger.info(f"Successfully created {len(documents)} documents")
+        # unique_id = f"{user_id}_{order_date}"
 
-        # Son olarak, embedding ve metadata'yı bir arada Pinecone'a gönderebilmek için ekliyoruz
-        embeddings.append((unique_id, embedding.tolist(), metadata))
+        # embeddings.append((unique_id, embedding.tolist(), metadata))
 
-    return embeddings
+    return documents
 
-def upsert_to_pinecone(embeddings):
+def upsert_to_pinecone(documents):
     try:
-        pinecone_api_key = os.getenv("PINECONE_API_KEY")
-        pc = Pinecone(api_key=pinecone_api_key)
-        index_name= "e-commerce"
-        batch_size = 100
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        
+        index_name= "ecommerce-2"
+        # batch_size = 100
+
+        embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-mpnet-base-v2"
+            ) 
         
         index= pc.Index(index_name)
 
-        for i in range(0, len(embeddings), batch_size):
-            batch = embeddings[i:i + batch_size]
-            index.upsert(vectors=batch, namespace="e-commerce")
-            print(f"Batch {i//batch_size + 1} added successfully")
+        vector_store = PineconeVectorStore.from_documents(
+                documents=documents,
+                embedding=embeddings,
+                index_name=index_name,
+                namespace="ecommerce-22"
+            )
+        
+        logger.info(f"Successfully completed Pinecone upload for {len(documents)} documents")
+
+        # for i in range(0, len(embeddings), batch_size):
+        #     batch = embeddings[i:i + batch_size]
+        #     index.upsert(vectors=batch, namespace="e-commerce")
+        #     print(f"Batch {i//batch_size + 1} added successfully")
             
-        return True
+        return vector_store
     except Exception as e:
         print(f"Error in upsert_to_pinecone: {e}")
-        return False
+        logger.error(f"Error uploading to Pinecone: {e}")
+        raise
 
 def mark_as_processed(processed_records):
     connection = create_connection()
@@ -141,31 +156,37 @@ def mark_as_processed(processed_records):
         connection.commit()
     except Exception as e:
         print(f"Error marking records as processed: {e}")
+        logger.error(f"Error marking records as processed: {e}")
     finally:
         connection.close()
 
 def sync_with_pinecone():
     while True:
         try:
-            # Değişen kayıtları al
             changed_records = fetch_changed_records()
             
             if changed_records:
                 # Tüm kayıtlar için embeddingler oluştur
-                embeddings = create_embeddings(changed_records)
+                documents = prepare(changed_records)
+
+                vector_store = upsert_to_pinecone(documents)
                 
-                # Pinecone'a gönder
-                if upsert_to_pinecone(embeddings):
-                    # Başarılı işlemi işaretle
-                    mark_as_processed(changed_records)
-                    print(f"Processed {len(changed_records)} records")
+                mark_as_processed(changed_records)
+                logger.info(f"Processed {len(changed_records)} records")  
+                # if upsert_to_pinecone(embeddings):
+                #     # Başarılı işlemi işaretle
+                #     mark_as_processed(changed_records)
+                #     print(f"Processed {len(changed_records)} records")
             
+                # Pinecone'a gönder
             # Bir sonraki kontrolden önce bekle
             time.sleep(10)
             
         except Exception as e:
             print(f"Error in sync loop: {e}")
-            time.sleep(10)  # Hata durumunda da bekle
+            logger.error(f"Error in sync loop: {e}")
+            time.sleep(10)  
+
 def start_sync_service():
     thread = threading.Thread(target=sync_with_pinecone, daemon=True)
     thread.start()
